@@ -2,40 +2,80 @@ local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
-local enabled = true -- global toggle
 
 -- =========================
--- GLASS SYSTEM
+-- STATE
 -- =========================
-local function apply(part)
-	if not enabled then return end
+local correctEnabled = false
+local wrongEnabled = false
 
-	if part.Name == "glass_panel_weak" then
-		part.Transparency = 0
-		part.Color = Color3.fromRGB(255, 0, 0)
-	elseif part.Name == "glass_panel" then
-		part.Transparency = 0
-		part.Color = Color3.fromRGB(0, 255, 0)
+local original = {}
+
+-- =========================
+-- HELPERS
+-- =========================
+local function isTarget(part)
+	return part:IsA("BasePart") and (
+		part.Name == "glass_panel" or part.Name == "glass_panel_weak"
+	)
+end
+
+local function store(part)
+	if original[part] then return end
+	original[part] = {
+		Color = part.Color,
+		Transparency = part.Transparency
+	}
+end
+
+local function restore(part)
+	local data = original[part]
+	if data then
+		part.Color = data.Color
+		part.Transparency = data.Transparency
 	end
 end
 
-workspace.DescendantAdded:Connect(function(obj)
-	if obj:IsA("BasePart") then
-		if obj.Name == "glass_panel" or obj.Name == "glass_panel_weak" then
-			apply(obj)
+local function apply(part)
+	if not isTarget(part) then return end
+
+	store(part)
+
+	if part.Name == "glass_panel" then
+		if correctEnabled then
+			part.Color = Color3.fromRGB(0, 255, 0)
+			part.Transparency = 0
+		else
+			restore(part)
+		end
+
+	elseif part.Name == "glass_panel_weak" then
+		if wrongEnabled then
+			part.Color = Color3.fromRGB(255, 0, 0)
+			part.Transparency = 0
+		else
+			restore(part)
 		end
 	end
-end)
+end
 
+-- =========================
+-- SAFE HOOK SYSTEM (NO BREAK ON RESPAWN)
+-- =========================
+local function hookObject(obj)
+	if isTarget(obj) then
+		apply(obj)
+	end
+end
+
+workspace.DescendantAdded:Connect(hookObject)
+
+-- initial load (chunked to avoid lag spike)
 task.spawn(function()
 	local count = 0
 
 	for _, obj in ipairs(workspace:GetDescendants()) do
-		if obj:IsA("BasePart") then
-			if obj.Name == "glass_panel" or obj.Name == "glass_panel_weak" then
-				apply(obj)
-			end
-		end
+		hookObject(obj)
 
 		count += 1
 		if count % 60 == 0 then
@@ -44,43 +84,52 @@ task.spawn(function()
 	end
 end)
 
+-- safety re-sync (catches map resets / respawns)
+task.spawn(function()
+	while true do
+		task.wait(2)
+
+		for _, obj in ipairs(workspace:GetDescendants()) do
+			if isTarget(obj) then
+				apply(obj)
+			end
+		end
+	end
+end)
+
 -- =========================
--- UI CREATION
+-- UI SETUP
 -- =========================
 local gui = Instance.new("ScreenGui")
-gui.Name = "GlassControlUI"
+gui.Name = "GlassUI"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 180, 0, 130)
-frame.Position = UDim2.new(0.5, -90, 0.5, -65)
+frame.Size = UDim2.new(0, 200, 0, 140)
+frame.Position = UDim2.new(0.5, -100, 0.5, -70)
 frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 frame.BackgroundTransparency = 0.25
-frame.Active = true
 frame.Parent = gui
-
 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
 
--- Top bar (drag)
+-- top bar
 local topBar = Instance.new("Frame")
 topBar.Size = UDim2.new(1, 0, 0, 25)
 topBar.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-topBar.BackgroundTransparency = 0.1
 topBar.Parent = frame
-
 Instance.new("UICorner", topBar).CornerRadius = UDim.new(0, 10)
 
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 1, 0)
 title.BackgroundTransparency = 1
-title.Text = "Glass Panel Control"
+title.Text = "Glass Control"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 14
 title.Parent = topBar
 
--- Button creator
+-- button creator
 local function makeButton(text, y, color)
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(0.85, 0, 0, 30)
@@ -94,26 +143,35 @@ local function makeButton(text, y, color)
 	btn.Parent = frame
 
 	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
-
 	return btn
 end
 
-local correctBtn = makeButton("Toggle Correct (ON)", 35, Color3.fromRGB(0, 170, 0))
-local wrongBtn = makeButton("Toggle Wrong (OFF)", 70, Color3.fromRGB(170, 0, 0))
+local correctBtn = makeButton("Correct: OFF", 35, Color3.fromRGB(0, 170, 0))
+local wrongBtn = makeButton("Wrong: OFF", 75, Color3.fromRGB(170, 0, 0))
 
 -- =========================
 -- BUTTON LOGIC
 -- =========================
 correctBtn.MouseButton1Click:Connect(function()
-	enabled = true
-	correctBtn.Text = "Toggle Correct (ON)"
-	wrongBtn.Text = "Toggle Wrong (OFF)"
+	correctEnabled = not correctEnabled
+	correctBtn.Text = correctEnabled and "Correct: ON" or "Correct: OFF"
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("BasePart") and obj.Name == "glass_panel" then
+			apply(obj)
+		end
+	end
 end)
 
 wrongBtn.MouseButton1Click:Connect(function()
-	enabled = false
-	correctBtn.Text = "Toggle Correct (OFF)"
-	wrongBtn.Text = "Toggle Wrong (ON)"
+	wrongEnabled = not wrongEnabled
+	wrongBtn.Text = wrongEnabled and "Wrong: ON" or "Wrong: OFF"
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("BasePart") and obj.Name == "glass_panel_weak" then
+			apply(obj)
+		end
+	end
 end)
 
 -- =========================
